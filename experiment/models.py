@@ -8,16 +8,16 @@ import torch
 import torch.nn as nn
 from torchvision import models
 
-from config import LSTM_HIDDEN_SIZE, LSTM_NUM_LAYERS, NUM_CLASSES, RESNET_FEATURE_DIM
+from config import LSTM_HIDDEN_SIZE, LSTM_NUM_LAYERS, RESNET_FEATURE_DIM
 
 
 class StaticEmotionModel(nn.Module):
     """
     ResNet-18 for static (single image) emotion recognition.
-    Pretrained on ImageNet, with final FC layer replaced for NUM_CLASSES.
+    Pretrained on ImageNet, with final FC layer replaced for requested class count.
     """
 
-    def __init__(self, num_classes=NUM_CLASSES, pretrained=True):
+    def __init__(self, num_classes=7, pretrained=True):
         super().__init__()
         weights = models.ResNet18_Weights.DEFAULT if pretrained else None
         self.resnet = models.resnet18(weights=weights)
@@ -42,7 +42,7 @@ class DynamicEmotionModel(nn.Module):
 
     def __init__(
         self,
-        num_classes=NUM_CLASSES,
+        num_classes=7,
         hidden_size=LSTM_HIDDEN_SIZE,
         num_layers=LSTM_NUM_LAYERS,
         pretrained=True,
@@ -95,7 +95,7 @@ class DynamicEmotionModel(nn.Module):
         return logits
 
 
-def get_model(model_type="static", pretrained=True):
+def get_model(model_type="static", num_classes=7, pretrained=True):
     """
     Factory function to create model.
 
@@ -104,8 +104,8 @@ def get_model(model_type="static", pretrained=True):
         pretrained: Whether to use ImageNet pretrained weights.
     """
     if model_type == "static":
-        return StaticEmotionModel(pretrained=pretrained)
+        return StaticEmotionModel(num_classes=num_classes, pretrained=pretrained)
     elif model_type == "dynamic":
-        return DynamicEmotionModel(pretrained=pretrained)
+        return DynamicEmotionModel(num_classes=num_classes, pretrained=pretrained)
     else:
         raise ValueError(f"Unknown model type: {model_type}. Use 'static' or 'dynamic'.")

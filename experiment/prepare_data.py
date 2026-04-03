@@ -1,8 +1,7 @@
-"""
-Data preparation: parse CK+ dataset into static (peak frames) and dynamic (sequences) formats.
-"""
+"""Prepare static and dynamic datasets from Urdu-Multimodal video files."""
 
-import os
+import csv
+import json
 import shutil
 from pathlib import Path
 
@@ -11,68 +10,60 @@ import numpy as np
 from tqdm import tqdm
 
 from config import (
-    CK_EMOTIONS_DIR,
-    CK_IMAGES_DIR,
-    CK_LABEL_MAP,
     IMG_SIZE,
+    LABEL_MAP_FILE,
+    MIN_FACE_SIZE,
     PROCESSED_DIR,
+    RANDOM_SEED,
     SEQUENCE_LENGTH,
+    TEST_RATIO,
+    TRAIN_RATIO,
+    URDU_DATASET_DIR,
+    URDU_METADATA_FILE,
+    URDU_VIDEO_DIR,
+    VAL_RATIO,
 )
 
 
-def load_ck_plus_samples():
-    """
-    Parse CK+ directory structure and return list of samples.
-    Each sample: (subject, sequence, emotion_label, image_paths)
-    """
-    samples = []
+def normalize_label(label):
+    """Normalize class labels to safe lowercase directory names."""
+    return str(label).strip().lower().replace(" ", "_")
 
-    if not CK_EMOTIONS_DIR.exists():
+
+def load_samples_from_csv(metadata_file):
+    """Load (sample_id, label, video_path) from train.csv and keep existing videos only."""
+    if not metadata_file.exists():
         raise FileNotFoundError(
-            f"Emotion labels directory not found: {CK_EMOTIONS_DIR}\n"
-            "Please download CK+ and place it in data/CK+/"
+            f"Metadata file not found: {metadata_file}\n"
+            "Place Urdu-Multimodal-Emotion-Dataset in data/Urdu-Multimodal-Emotion-Dataset/"
         )
 
-    for subject_dir in sorted(CK_EMOTIONS_DIR.iterdir()):
-        if not subject_dir.is_dir():
-            continue
-        subject = subject_dir.name
+    samples = []
+    with open(metadata_file, "r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        required = {"id", "video_path", "label"}
+        if not required.issubset(set(reader.fieldnames or [])):
+            raise ValueError(
+                f"train.csv must contain columns {sorted(required)}; got {reader.fieldnames}"
+            )
 
-        for seq_dir in sorted(subject_dir.iterdir()):
-            if not seq_dir.is_dir():
-                continue
-            sequence = seq_dir.name
+        for row in reader:
+            sample_id = str(row["id"]).strip()
+            label = normalize_label(row["label"])
+            rel_video = str(row["video_path"]).strip()
+            video_file = URDU_DATASET_DIR / rel_video
 
-            # Read emotion label file (only last frame has emotion label)
-            emotion_files = sorted(seq_dir.glob("*.txt"))
-            if not emotion_files:
-                continue  # No emotion label for this sequence
+            if not video_file.exists() and rel_video.startswith("video/"):
+                video_file = URDU_VIDEO_DIR / Path(rel_video).name
 
-            with open(emotion_files[0], "r") as f:
-                raw_label = int(float(f.read().strip()))
-
-            if raw_label not in CK_LABEL_MAP:
-                continue  # Skip neutral (0) or unknown labels
-
-            emotion_label = CK_LABEL_MAP[raw_label]
-
-            # Get corresponding image sequence
-            img_dir = CK_IMAGES_DIR / subject / sequence
-            if not img_dir.exists():
-                continue
-
-            image_paths = sorted(img_dir.glob("*.png"))
-            if not image_paths:
-                image_paths = sorted(img_dir.glob("*.jpg"))
-            if not image_paths:
+            if not video_file.exists():
                 continue
 
             samples.append(
                 {
-                    "subject": subject,
-                    "sequence": sequence,
-                    "emotion": emotion_label,
-                    "image_paths": [str(p) for p in image_paths],
+                    "id": sample_id,
+                    "label": label,
+                    "video_path": str(video_file),
                 }
             )
 
@@ -80,200 +71,235 @@ def load_ck_plus_samples():
 
 
 def detect_and_crop_face(image, face_cascade):
-    """
-    Detect face in image and return cropped + resized face.
-    Returns None if no face detected.
-    """
+    """Detect and crop largest face; fallback to resized full frame."""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(48, 48))
+    faces = face_cascade.detectMultiScale(
+        gray, scaleFactor=1.1, minNeighbors=5, minSize=(MIN_FACE_SIZE, MIN_FACE_SIZE)
+    )
 
     if len(faces) == 0:
-        # Fallback: use the entire image
         return cv2.resize(image, (IMG_SIZE, IMG_SIZE))
 
-    # Use the largest face
     x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
-
-    # Add margin
     margin = int(0.1 * max(w, h))
+
     x1 = max(0, x - margin)
     y1 = max(0, y - margin)
     x2 = min(image.shape[1], x + w + margin)
     y2 = min(image.shape[0], y + h + margin)
 
     face = image[y1:y2, x1:x2]
-    face = cv2.resize(face, (IMG_SIZE, IMG_SIZE))
-    return face
+    return cv2.resize(face, (IMG_SIZE, IMG_SIZE))
 
 
-def prepare_static_data(samples, face_cascade, output_dir):
-    """
-    Extract peak frame (last frame) from each sequence.
-    Save as: output_dir/<emotion>/<subject>_<sequence>.png
-    """
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+def sample_frame_indices(frame_count, seq_len):
+    """Generate seq_len indices uniformly across a clip."""
+    if frame_count <= 0:
+        return []
+    if frame_count == 1:
+        return [0] * seq_len
+    points = np.linspace(0, frame_count - 1, num=seq_len)
+    return [int(round(p)) for p in points]
 
-    from config import EMOTIONS
 
-    for emo_idx, emo_name in EMOTIONS.items():
-        (output_dir / emo_name).mkdir(exist_ok=True)
+def extract_frames(video_path, frame_indices):
+    """Read specific frame indices from a video."""
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        return []
 
-    count = 0
-    for sample in tqdm(samples, desc="Preparing static data"):
-        peak_frame_path = sample["image_paths"][-1]
-        image = cv2.imread(peak_frame_path)
-        if image is None:
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if total <= 0:
+        cap.release()
+        return []
+
+    frames = []
+    for idx in frame_indices:
+        idx = max(0, min(idx, total - 1))
+        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+        ok, frame = cap.read()
+        if not ok or frame is None:
             continue
+        frames.append(frame)
 
-        face = detect_and_crop_face(image, face_cascade)
-        if face is None:
-            continue
-
-        emo_name = EMOTIONS[sample["emotion"]]
-        filename = f"{sample['subject']}_{sample['sequence']}.png"
-        cv2.imwrite(str(output_dir / emo_name / filename), face)
-        count += 1
-
-    print(f"Static data: {count} images saved to {output_dir}")
-    return count
+    cap.release()
+    return frames
 
 
-def prepare_dynamic_data(samples, face_cascade, output_dir):
-    """
-    Extract last N frames from each sequence.
-    Save as: output_dir/<emotion>/<subject>_<sequence>/frame_00.png, frame_01.png, ...
-    """
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    from config import EMOTIONS
-
-    for emo_idx, emo_name in EMOTIONS.items():
-        (output_dir / emo_name).mkdir(exist_ok=True)
-
-    count = 0
-    for sample in tqdm(samples, desc="Preparing dynamic data"):
-        paths = sample["image_paths"]
-
-        # Take last SEQUENCE_LENGTH frames; pad with first frame if too short
-        if len(paths) >= SEQUENCE_LENGTH:
-            selected_paths = paths[-SEQUENCE_LENGTH:]
-        else:
-            # Pad by repeating the first frame
-            padding = [paths[0]] * (SEQUENCE_LENGTH - len(paths))
-            selected_paths = padding + paths
-
-        emo_name = EMOTIONS[sample["emotion"]]
-        seq_dir = output_dir / emo_name / f"{sample['subject']}_{sample['sequence']}"
-        seq_dir.mkdir(exist_ok=True)
-
-        valid = True
-        for i, frame_path in enumerate(selected_paths):
-            image = cv2.imread(frame_path)
-            if image is None:
-                valid = False
-                break
-            face = detect_and_crop_face(image, face_cascade)
-            if face is None:
-                valid = False
-                break
-            cv2.imwrite(str(seq_dir / f"frame_{i:02d}.png"), face)
-
-        if valid:
-            count += 1
-        else:
-            # Clean up partial sequence
-            shutil.rmtree(seq_dir, ignore_errors=True)
-
-    print(f"Dynamic data: {count} sequences saved to {output_dir}")
-    return count
+def create_label_map(samples):
+    """Create stable label-to-index mapping from present samples."""
+    labels = sorted({s["label"] for s in samples})
+    label_to_idx = {label: i for i, label in enumerate(labels)}
+    idx_to_label = {i: label for label, i in label_to_idx.items()}
+    return label_to_idx, idx_to_label
 
 
 def create_splits(samples, output_file):
-    """
-    Create subject-independent train/val/test splits.
-    Save split assignments to a text file.
-    """
-    from config import RANDOM_SEED, TEST_RATIO, TRAIN_RATIO, VAL_RATIO
+    """Create stratified train/val/test split by label."""
+    rng = np.random.default_rng(RANDOM_SEED)
+    by_label = {}
+    for s in samples:
+        by_label.setdefault(s["label"], []).append(s)
 
-    np.random.seed(RANDOM_SEED)
+    split_map = {}
+    counts = {"train": 0, "val": 0, "test": 0}
 
-    # Get unique subjects
-    subjects = sorted(set(s["subject"] for s in samples))
-    np.random.shuffle(subjects)
+    for label, group in by_label.items():
+        order = np.arange(len(group))
+        rng.shuffle(order)
+        group = [group[i] for i in order]
 
-    n = len(subjects)
-    n_train = int(n * TRAIN_RATIO)
-    n_val = int(n * VAL_RATIO)
+        n = len(group)
+        n_train = int(n * TRAIN_RATIO)
+        n_val = int(n * VAL_RATIO)
 
-    train_subjects = set(subjects[:n_train])
-    val_subjects = set(subjects[n_train : n_train + n_val])
-    test_subjects = set(subjects[n_train + n_val :])
-
-    splits = {}
-    for sample in samples:
-        key = f"{sample['subject']}_{sample['sequence']}"
-        if sample["subject"] in train_subjects:
-            splits[key] = "train"
-        elif sample["subject"] in val_subjects:
-            splits[key] = "val"
-        else:
-            splits[key] = "test"
+        for i, sample in enumerate(group):
+            if i < n_train:
+                split = "train"
+            elif i < n_train + n_val:
+                split = "val"
+            else:
+                split = "test"
+            split_map[sample["id"]] = split
+            counts[split] += 1
 
     output_file = Path(output_file)
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_file, "w") as f:
-        for key, split in sorted(splits.items()):
-            f.write(f"{key}\t{split}\n")
+    with open(output_file, "w", encoding="utf-8") as f:
+        for sample_id in sorted(split_map.keys()):
+            f.write(f"{sample_id}\t{split_map[sample_id]}\n")
 
-    train_count = sum(1 for v in splits.values() if v == "train")
-    val_count = sum(1 for v in splits.values() if v == "val")
-    test_count = sum(1 for v in splits.values() if v == "test")
-    print(f"Splits: train={train_count}, val={val_count}, test={test_count}")
-    print(f"Subjects: train={len(train_subjects)}, val={len(val_subjects)}, test={len(test_subjects)}")
+    print(
+        f"Splits: train={counts['train']}, val={counts['val']}, test={counts['test']}"
+    )
+    return split_map
 
-    return splits
+
+def prepare_static_data(samples, face_cascade, output_dir):
+    """Save one representative frame per video to static/<label>/<id>.png."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    labels = sorted({s["label"] for s in samples})
+    for label in labels:
+        (output_dir / label).mkdir(exist_ok=True)
+
+    saved = 0
+    for sample in tqdm(samples, desc="Preparing static data"):
+        cap = cv2.VideoCapture(sample["video_path"])
+        if not cap.isOpened():
+            continue
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
+        if frame_count <= 0:
+            continue
+
+        # Static baseline takes the center frame from each clip.
+        center_idx = frame_count // 2
+        frames = extract_frames(sample["video_path"], [center_idx])
+        if not frames:
+            continue
+
+        face = detect_and_crop_face(frames[0], face_cascade)
+        out_path = output_dir / sample["label"] / f"{sample['id']}.png"
+        cv2.imwrite(str(out_path), face)
+        saved += 1
+
+    print(f"Static data: {saved} images saved to {output_dir}")
+    return saved
+
+
+def prepare_dynamic_data(samples, face_cascade, output_dir):
+    """Save SEQUENCE_LENGTH frames per video to dynamic/<label>/<id>/frame_xx.png."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    labels = sorted({s["label"] for s in samples})
+    for label in labels:
+        (output_dir / label).mkdir(exist_ok=True)
+
+    saved = 0
+    for sample in tqdm(samples, desc="Preparing dynamic data"):
+        cap = cv2.VideoCapture(sample["video_path"])
+        if not cap.isOpened():
+            continue
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
+        if frame_count <= 0:
+            continue
+
+        frame_indices = sample_frame_indices(frame_count, SEQUENCE_LENGTH)
+        frames = extract_frames(sample["video_path"], frame_indices)
+        if not frames:
+            continue
+
+        seq_dir = output_dir / sample["label"] / sample["id"]
+        seq_dir.mkdir(exist_ok=True)
+
+        ok = True
+        for i, frame in enumerate(frames):
+            face = detect_and_crop_face(frame, face_cascade)
+            if face is None:
+                ok = False
+                break
+            cv2.imwrite(str(seq_dir / f"frame_{i:02d}.png"), face)
+
+        while ok and len(list(seq_dir.glob("frame_*.png"))) < SEQUENCE_LENGTH:
+            existing = sorted(seq_dir.glob("frame_*.png"))
+            if not existing:
+                ok = False
+                break
+            shutil.copy(existing[-1], seq_dir / f"frame_{len(existing):02d}.png")
+
+        if ok:
+            saved += 1
+        else:
+            shutil.rmtree(seq_dir, ignore_errors=True)
+
+    print(f"Dynamic data: {saved} sequences saved to {output_dir}")
+    return saved
+
+
+def save_label_map(label_to_idx, idx_to_label):
+    """Save label mappings used by train/evaluate/realtime."""
+    LABEL_MAP_FILE.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "label_to_idx": label_to_idx,
+        "idx_to_label": {str(k): v for k, v in idx_to_label.items()},
+    }
+    with open(LABEL_MAP_FILE, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+    print(f"Label map saved to {LABEL_MAP_FILE}")
 
 
 def main():
     print("=" * 60)
-    print("CK+ Dataset Preparation")
+    print("Urdu-Multimodal Dataset Preparation")
     print("=" * 60)
 
-    # Load Haar cascade for face detection
     cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
     face_cascade = cv2.CascadeClassifier(cascade_path)
 
-    # Parse CK+
-    print("\nParsing CK+ dataset...")
-    samples = load_ck_plus_samples()
-    print(f"Found {len(samples)} labeled sequences")
+    print("\nLoading metadata...")
+    samples = load_samples_from_csv(URDU_METADATA_FILE)
+    print(f"Found {len(samples)} usable samples with existing videos")
 
     if len(samples) == 0:
-        print("ERROR: No samples found. Check the CK+ dataset path.")
+        print("ERROR: No samples found. Check dataset path and train.csv.")
         return
 
-    # Print emotion distribution
-    from config import EMOTIONS
+    label_to_idx, idx_to_label = create_label_map(samples)
+    print("\nLabels:")
+    for idx in sorted(idx_to_label.keys()):
+        print(f"  {idx}: {idx_to_label[idx]}")
+    save_label_map(label_to_idx, idx_to_label)
 
-    emotion_counts = {}
-    for s in samples:
-        emo = EMOTIONS[s["emotion"]]
-        emotion_counts[emo] = emotion_counts.get(emo, 0) + 1
-    print("\nEmotion distribution:")
-    for emo, count in sorted(emotion_counts.items()):
-        print(f"  {emo}: {count}")
-
-    # Create splits
     print("\nCreating train/val/test splits...")
-    splits = create_splits(samples, PROCESSED_DIR / "splits.txt")
+    create_splits(samples, PROCESSED_DIR / "splits.txt")
 
-    # Prepare static data
-    print("\nPreparing static (peak frame) data...")
+    print("\nPreparing static (single-frame) data...")
     prepare_static_data(samples, face_cascade, PROCESSED_DIR / "static")
 
-    # Prepare dynamic data
     print(f"\nPreparing dynamic (sequence of {SEQUENCE_LENGTH} frames) data...")
     prepare_dynamic_data(samples, face_cascade, PROCESSED_DIR / "dynamic")
 

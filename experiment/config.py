@@ -1,46 +1,22 @@
-"""
-Configuration constants for the experiment.
-"""
+"""Configuration constants for the experiment."""
 
-import os
 from pathlib import Path
 
 # --- Paths ---
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
-CK_PLUS_DIR = DATA_DIR / "CK+"
-CK_IMAGES_DIR = CK_PLUS_DIR / "cohn-kanade-images"
-CK_EMOTIONS_DIR = CK_PLUS_DIR / "Emotion"
+URDU_DATASET_DIR = DATA_DIR / "Urdu-Multimodal-Emotion-Dataset"
+URDU_METADATA_FILE = URDU_DATASET_DIR / "train.csv"
+URDU_VIDEO_DIR = URDU_DATASET_DIR / "video"
 PROCESSED_DIR = DATA_DIR / "processed"
+LABEL_MAP_FILE = PROCESSED_DIR / "label_map.json"
 CHECKPOINTS_DIR = BASE_DIR / "checkpoints"
 RESULTS_DIR = BASE_DIR / "results"
 
-# --- Dataset ---
-EMOTIONS = {
-    0: "anger",
-    1: "contempt",
-    2: "disgust",
-    3: "fear",
-    4: "happiness",
-    5: "sadness",
-    6: "surprise",
-}
-NUM_CLASSES = len(EMOTIONS)
-# CK+ emotion labels mapping (original label -> our index)
-# CK+ uses: 0=neutral, 1=anger, 2=contempt, 3=disgust, 4=fear, 5=happy, 6=sadness, 7=surprise
-CK_LABEL_MAP = {
-    1: 0,  # anger -> 0
-    2: 1,  # contempt -> 1
-    3: 2,  # disgust -> 2
-    4: 3,  # fear -> 3
-    5: 4,  # happiness -> 4
-    6: 5,  # sadness -> 5
-    7: 6,  # surprise -> 6
-}
-
-# --- Image ---
+# --- Image / Video ---
 IMG_SIZE = 224
 SEQUENCE_LENGTH = 16  # Number of frames for dynamic model
+MIN_FACE_SIZE = 64
 
 # --- Training ---
 BATCH_SIZE_STATIC = 32
@@ -62,4 +38,9 @@ RANDOM_SEED = 42
 
 # --- Device ---
 import torch
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+if torch.cuda.is_available():
+    DEVICE = torch.device("cuda")
+elif torch.backends.mps.is_available() and torch.backends.mps.is_built():
+    DEVICE = torch.device("mps")
+else:
+    DEVICE = torch.device("cpu")

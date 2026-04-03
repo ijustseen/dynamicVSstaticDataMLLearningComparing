@@ -9,11 +9,11 @@ import argparse
 import time
 
 import cv2
-import numpy as np
 import torch
 from torchvision import transforms
 
-from config import CHECKPOINTS_DIR, DEVICE, EMOTIONS, IMG_SIZE, SEQUENCE_LENGTH
+from config import CHECKPOINTS_DIR, DEVICE, IMG_SIZE, LABEL_MAP_FILE, SEQUENCE_LENGTH
+from dataset import load_label_map
 from models import get_model
 
 
@@ -41,11 +41,18 @@ def main():
     parser.add_argument("--camera", type=int, default=0, help="Camera index")
     args = parser.parse_args()
 
+    if not LABEL_MAP_FILE.exists():
+        print("ERROR: label_map.json not found. Run prepare_data.py first.")
+        return
+
+    _, idx_to_label = load_label_map(LABEL_MAP_FILE)
+    num_classes = len(idx_to_label)
+
     model_type = args.model
     print(f"Loading {model_type} model...")
 
     # Load model
-    model = get_model(model_type, pretrained=False).to(DEVICE)
+    model = get_model(model_type, num_classes=num_classes, pretrained=False).to(DEVICE)
     ckpt_path = CHECKPOINTS_DIR / f"best_{model_type}.pth"
 
     if not ckpt_path.exists():
@@ -128,7 +135,7 @@ def main():
                 confidence, pred = probs.max(1)
                 confidence = confidence.item()
                 emotion_idx = pred.item()
-                emotion_text = EMOTIONS[emotion_idx]
+                emotion_text = idx_to_label.get(emotion_idx, f"class_{emotion_idx}")
 
             # Draw bounding box and label
             color = (0, 255, 0) if confidence > 0.5 else (0, 165, 255)

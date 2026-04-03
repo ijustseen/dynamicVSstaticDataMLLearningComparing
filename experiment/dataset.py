@@ -1,16 +1,14 @@
-"""
-PyTorch datasets for static and dynamic emotion recognition.
-"""
+"""PyTorch datasets for static and dynamic emotion recognition."""
 
+import json
 from pathlib import Path
 
 import cv2
-import numpy as np
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
 
-from config import EMOTIONS, IMG_SIZE, SEQUENCE_LENGTH
+from config import IMG_SIZE, LABEL_MAP_FILE, SEQUENCE_LENGTH
 
 
 def get_transforms(is_training=True):
@@ -48,10 +46,20 @@ def load_splits(splits_file):
     return splits
 
 
+def load_label_map(label_map_file=LABEL_MAP_FILE):
+    """Load label mappings saved during data preparation."""
+    with open(label_map_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    label_to_idx = {str(k): int(v) for k, v in data["label_to_idx"].items()}
+    idx_to_label = {int(k): str(v) for k, v in data["idx_to_label"].items()}
+    return label_to_idx, idx_to_label
+
+
 class StaticEmotionDataset(Dataset):
     """Dataset for static (single image) emotion recognition."""
 
-    def __init__(self, data_dir, splits_file, split="train"):
+    def __init__(self, data_dir, splits_file, split="train", label_map_file=LABEL_MAP_FILE):
         """
         Args:
             data_dir: Path to processed/static/ directory
@@ -61,17 +69,18 @@ class StaticEmotionDataset(Dataset):
         self.data_dir = Path(data_dir)
         self.is_training = split == "train"
         self.transform = get_transforms(self.is_training)
+        self.label_to_idx, self.idx_to_label = load_label_map(label_map_file)
 
         splits = load_splits(splits_file)
 
         self.samples = []  # List of (image_path, label)
 
-        for emo_idx, emo_name in EMOTIONS.items():
+        for emo_name, emo_idx in self.label_to_idx.items():
             emo_dir = self.data_dir / emo_name
             if not emo_dir.exists():
                 continue
             for img_file in sorted(emo_dir.glob("*.png")):
-                key = img_file.stem  # e.g., "S005_001"
+                key = img_file.stem
                 if splits.get(key) == split:
                     self.samples.append((str(img_file), emo_idx))
 
@@ -89,7 +98,7 @@ class StaticEmotionDataset(Dataset):
 class DynamicEmotionDataset(Dataset):
     """Dataset for dynamic (video sequence) emotion recognition."""
 
-    def __init__(self, data_dir, splits_file, split="train"):
+    def __init__(self, data_dir, splits_file, split="train", label_map_file=LABEL_MAP_FILE):
         """
         Args:
             data_dir: Path to processed/dynamic/ directory
@@ -99,19 +108,20 @@ class DynamicEmotionDataset(Dataset):
         self.data_dir = Path(data_dir)
         self.is_training = split == "train"
         self.transform = get_transforms(self.is_training)
+        self.label_to_idx, self.idx_to_label = load_label_map(label_map_file)
 
         splits = load_splits(splits_file)
 
         self.samples = []  # List of (sequence_dir, label)
 
-        for emo_idx, emo_name in EMOTIONS.items():
+        for emo_name, emo_idx in self.label_to_idx.items():
             emo_dir = self.data_dir / emo_name
             if not emo_dir.exists():
                 continue
             for seq_dir in sorted(emo_dir.iterdir()):
                 if not seq_dir.is_dir():
                     continue
-                key = seq_dir.name  # e.g., "S005_001"
+                key = seq_dir.name
                 if splits.get(key) == split:
                     self.samples.append((str(seq_dir), emo_idx))
 

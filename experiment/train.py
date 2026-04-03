@@ -21,13 +21,14 @@ from config import (
     BATCH_SIZE_STATIC,
     CHECKPOINTS_DIR,
     DEVICE,
+    LABEL_MAP_FILE,
     LEARNING_RATE,
     NUM_EPOCHS,
     PROCESSED_DIR,
     RESULTS_DIR,
     WEIGHT_DECAY,
 )
-from dataset import DynamicEmotionDataset, StaticEmotionDataset
+from dataset import DynamicEmotionDataset, StaticEmotionDataset, load_label_map
 from models import get_model
 
 
@@ -141,16 +142,23 @@ def main():
     if not splits_file.exists():
         print("ERROR: splits.txt not found. Run prepare_data.py first.")
         return
+    if not LABEL_MAP_FILE.exists():
+        print("ERROR: label_map.json not found. Run prepare_data.py first.")
+        return
+
+    label_to_idx, idx_to_label = load_label_map(LABEL_MAP_FILE)
+    num_classes = len(label_to_idx)
+    print(f"Classes ({num_classes}): {', '.join(idx_to_label[i] for i in sorted(idx_to_label))}")
 
     if model_type == "static":
         data_dir = PROCESSED_DIR / "static"
-        train_ds = StaticEmotionDataset(data_dir, splits_file, split="train")
-        val_ds = StaticEmotionDataset(data_dir, splits_file, split="val")
+        train_ds = StaticEmotionDataset(data_dir, splits_file, split="train", label_map_file=LABEL_MAP_FILE)
+        val_ds = StaticEmotionDataset(data_dir, splits_file, split="val", label_map_file=LABEL_MAP_FILE)
         batch_size = BATCH_SIZE_STATIC
     else:
         data_dir = PROCESSED_DIR / "dynamic"
-        train_ds = DynamicEmotionDataset(data_dir, splits_file, split="train")
-        val_ds = DynamicEmotionDataset(data_dir, splits_file, split="val")
+        train_ds = DynamicEmotionDataset(data_dir, splits_file, split="train", label_map_file=LABEL_MAP_FILE)
+        val_ds = DynamicEmotionDataset(data_dir, splits_file, split="val", label_map_file=LABEL_MAP_FILE)
         batch_size = BATCH_SIZE_DYNAMIC
 
     print(f"Train samples: {len(train_ds)}")
@@ -168,7 +176,7 @@ def main():
     )
 
     # Create model
-    model = get_model(model_type, pretrained=True).to(DEVICE)
+    model = get_model(model_type, num_classes=num_classes, pretrained=True).to(DEVICE)
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     # Loss and optimizer

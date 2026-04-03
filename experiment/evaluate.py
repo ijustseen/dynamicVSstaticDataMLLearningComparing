@@ -29,11 +29,11 @@ from config import (
     BATCH_SIZE_STATIC,
     CHECKPOINTS_DIR,
     DEVICE,
-    EMOTIONS,
+    LABEL_MAP_FILE,
     PROCESSED_DIR,
     RESULTS_DIR,
 )
-from dataset import DynamicEmotionDataset, StaticEmotionDataset
+from dataset import DynamicEmotionDataset, StaticEmotionDataset, load_label_map
 from models import get_model
 
 
@@ -154,7 +154,13 @@ def main():
     print(f"Device: {DEVICE}")
     print(f"{'=' * 60}")
 
-    class_names = [EMOTIONS[i] for i in range(len(EMOTIONS))]
+    if not LABEL_MAP_FILE.exists():
+        print("ERROR: label_map.json not found. Run prepare_data.py first.")
+        return
+
+    label_to_idx, idx_to_label = load_label_map(LABEL_MAP_FILE)
+    class_names = [idx_to_label[i] for i in sorted(idx_to_label.keys())]
+    num_classes = len(class_names)
     splits_file = PROCESSED_DIR / "splits.txt"
 
     results = {}
@@ -162,11 +168,13 @@ def main():
     # --- Static model ---
     static_ckpt = CHECKPOINTS_DIR / "best_static.pth"
     if static_ckpt.exists():
-        model_static = get_model("static", pretrained=False).to(DEVICE)
+        model_static = get_model("static", num_classes=num_classes, pretrained=False).to(DEVICE)
         checkpoint = torch.load(static_ckpt, map_location=DEVICE, weights_only=True)
         model_static.load_state_dict(checkpoint["model_state_dict"])
 
-        test_ds = StaticEmotionDataset(PROCESSED_DIR / "static", splits_file, split="test")
+        test_ds = StaticEmotionDataset(
+            PROCESSED_DIR / "static", splits_file, split="test", label_map_file=LABEL_MAP_FILE
+        )
         test_loader = DataLoader(test_ds, batch_size=BATCH_SIZE_STATIC, shuffle=False, num_workers=4)
         print(f"\nStatic test samples: {len(test_ds)}")
 
@@ -177,11 +185,13 @@ def main():
     # --- Dynamic model ---
     dynamic_ckpt = CHECKPOINTS_DIR / "best_dynamic.pth"
     if dynamic_ckpt.exists():
-        model_dynamic = get_model("dynamic", pretrained=False).to(DEVICE)
+        model_dynamic = get_model("dynamic", num_classes=num_classes, pretrained=False).to(DEVICE)
         checkpoint = torch.load(dynamic_ckpt, map_location=DEVICE, weights_only=True)
         model_dynamic.load_state_dict(checkpoint["model_state_dict"])
 
-        test_ds = DynamicEmotionDataset(PROCESSED_DIR / "dynamic", splits_file, split="test")
+        test_ds = DynamicEmotionDataset(
+            PROCESSED_DIR / "dynamic", splits_file, split="test", label_map_file=LABEL_MAP_FILE
+        )
         test_loader = DataLoader(
             test_ds, batch_size=BATCH_SIZE_DYNAMIC, shuffle=False, num_workers=4
         )
