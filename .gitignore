@@ -1,0 +1,16 @@
+# Data and virtual environment
+experiment/data/*
+experiment/.venv/
+
+# Experiment outputs (generated)
+experiment/checkpoints/
+
+
+# Python caches
+__pycache__/
+experiment/__pycache__/
+*.py[cod]
+
+# OS junk
+.DS_Store
+Thumbs.db

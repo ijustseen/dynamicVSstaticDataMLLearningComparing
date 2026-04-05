@@ -39,7 +39,9 @@ def load_samples_from_csv(metadata_file):
         )
 
     samples = []
-    with open(metadata_file, "r", newline="", encoding="utf-8") as f:
+    # NOTE: Some CSVs include a UTF-8 BOM, which would turn the first header into "\ufeffid".
+    # Using utf-8-sig transparently strips BOM if present.
+    with open(metadata_file, "r", newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         required = {"id", "video_path", "label"}
         if not required.issubset(set(reader.fieldnames or [])):
