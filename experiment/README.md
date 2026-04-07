@@ -34,17 +34,25 @@ This creates data/processed/ with:
 ## Training
 
 ```bash
-# Train static model (ResNet-18)
-python train.py --model static
-
-# Train dynamic model (ResNet-18 + LSTM)
-python train.py --model dynamic
+# Recommended baseline (stable training)
+python train.py --model static --epochs 30 --lr 1e-4
+python train.py --model dynamic --epochs 30 --lr 1e-4
 ```
+
+Notes:
+- Dynamic tends to achieve higher accuracy, but runs at lower FPS.
+- Use `evaluate.py` for objective comparison; it saves metrics to `results/evaluation_results.json`.
 
 ## Evaluation
 
 ```bash
 python evaluate.py
+```
+
+Optional (training curves on a single figure):
+
+```bash
+python plot_compare.py
 ```
 
 ## Real-time Demo
@@ -61,7 +69,7 @@ pip install -r requirements.txt
 find data/Urdu-Multimodal-Emotion-Dataset -maxdepth 2 -type d | head -n 40
 python prepare_data.py
 ls -la data/processed && wc -l data/processed/splits.txt && cat data/processed/label_map.json
-python train.py --model static --epochs 20
-python train.py --model dynamic --epochs 20
+python train.py --model static --epochs 30 --lr 1e-4
+python train.py --model dynamic --epochs 30 --lr 1e-4
 python evaluate.py
 ls -la checkpoints results

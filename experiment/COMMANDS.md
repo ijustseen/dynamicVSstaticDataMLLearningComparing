@@ -99,8 +99,13 @@ python train.py --model dynamic --epochs 1
 Full runs (example):
 
 ```powershell
-python train.py --model static --epochs 15
-python train.py --model dynamic --epochs 15
+# Recommended baseline (more stable training):
+python train.py --model static --epochs 30 --lr 1e-4
+python train.py --model dynamic --epochs 30 --lr 1e-4
+
+# If you want a faster run:
+# python train.py --model static --epochs 15
+# python train.py --model dynamic --epochs 15
 ```
 
 Outputs:
@@ -113,10 +118,17 @@ Outputs:
 python evaluate.py
 ```
 
+Optional: generate a single comparison plot (static vs dynamic training curves):
+
+```powershell
+python plot_compare.py
+```
+
 Outputs (in `results/`):
 - `evaluation_results.json`
 - `confusion_static.png`
 - `confusion_dynamic.png`
+- `training_compare.png`
 
 ## 6) Real-time webcam demo
 
