@@ -4,6 +4,7 @@ experiment/.venv/
 
 # Experiment outputs (generated)
 experiment/checkpoints/
+experiment/results/
 
 
 # Python caches

@@ -4,11 +4,19 @@ Produces metrics (accuracy, precision, recall, F1), confusion matrices, and comp
 
 Usage:
     python evaluate.py
+    python evaluate.py --variant opt
+    python evaluate.py --static-ckpt path/to/static.pth --dynamic-ckpt path/to/dynamic.pth --tag my_tag
+
+Outputs:
+    - without --tag: writes to results/latest/ (overwrites "latest")
+    - with --tag: writes to results/experiments/<tag>/
 """
 
 import json
 import time
+from datetime import datetime
 from pathlib import Path
+import argparse
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -31,7 +39,8 @@ from config import (
     DEVICE,
     LABEL_MAP_FILE,
     PROCESSED_DIR,
-    RESULTS_DIR,
+    EXPERIMENTS_DIR,
+    LATEST_RESULTS_DIR,
 )
 from dataset import DynamicEmotionDataset, StaticEmotionDataset, load_label_map
 from models import get_model
@@ -106,7 +115,7 @@ def plot_confusion_matrix(cm, class_names, title, save_path):
     plt.close()
 
 
-def evaluate_model(model_type, model, dataloader, device, class_names):
+def evaluate_model(model_type, model, dataloader, device, class_names, output_suffix, output_dir: Path):
     """Evaluate a single model and return metrics dict."""
     print(f"\nEvaluating {model_type.upper()} model...")
 
@@ -129,12 +138,12 @@ def evaluate_model(model_type, model, dataloader, device, class_names):
     print(f"\n  Classification Report:\n{report}")
 
     # Save confusion matrix plot
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
     plot_confusion_matrix(
         cm,
         class_names,
-        f"Confusion Matrix — {model_type.capitalize()} Model",
-        RESULTS_DIR / f"confusion_{model_type}.png",
+        f"Confusion Matrix — {model_type.capitalize()}{output_suffix} Model",
+        output_dir / f"confusion_{model_type}{output_suffix}.png",
     )
 
     return {
@@ -149,9 +158,57 @@ def evaluate_model(model_type, model, dataloader, device, class_names):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Evaluate models on the test set")
+    parser.add_argument(
+        "--variant",
+        choices=["base", "opt"],
+        default="base",
+        help="Which checkpoints/results to use: base (best_static.pth) or opt (best_static_opt.pth)",
+    )
+    parser.add_argument(
+        "--static-ckpt",
+        type=str,
+        default=None,
+        help="Optional explicit path to static checkpoint (.pth). Overrides --variant static checkpoint.",
+    )
+    parser.add_argument(
+        "--dynamic-ckpt",
+        type=str,
+        default=None,
+        help="Optional explicit path to dynamic checkpoint (.pth). Overrides --variant dynamic checkpoint.",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        default=None,
+        help="Optional experiment tag. If provided, outputs go to results/experiments/<tag>/.",
+    )
+    args = parser.parse_args()
+    output_suffix = "" if args.variant == "base" else "_opt"
+
+    if args.tag:
+        output_dir = EXPERIMENTS_DIR / args.tag
+    else:
+        output_dir = LATEST_RESULTS_DIR
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     print(f"\n{'=' * 60}")
     print("Model Evaluation & Comparison")
     print(f"Device: {DEVICE}")
+    print(f"Variant: {args.variant}")
+    if args.tag:
+        print(f"Tag: {args.tag}")
+        meta_path = output_dir / "meta.json"
+        meta = {
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "variant": args.variant,
+            "device": str(DEVICE),
+            "static_ckpt": args.static_ckpt,
+            "dynamic_ckpt": args.dynamic_ckpt,
+        }
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+        print(f"Meta saved to {meta_path}")
     print(f"{'=' * 60}")
 
     if not LABEL_MAP_FILE.exists():
@@ -166,7 +223,11 @@ def main():
     results = {}
 
     # --- Static model ---
-    static_ckpt = CHECKPOINTS_DIR / "best_static.pth"
+    static_ckpt = (
+        Path(args.static_ckpt)
+        if args.static_ckpt
+        else CHECKPOINTS_DIR / f"best_static{'' if args.variant == 'base' else '_opt'}.pth"
+    )
     if static_ckpt.exists():
         model_static = get_model("static", num_classes=num_classes, pretrained=False).to(DEVICE)
         checkpoint = torch.load(static_ckpt, map_location=DEVICE, weights_only=True)
@@ -178,12 +239,18 @@ def main():
         test_loader = DataLoader(test_ds, batch_size=BATCH_SIZE_STATIC, shuffle=False, num_workers=4)
         print(f"\nStatic test samples: {len(test_ds)}")
 
-        results["static"] = evaluate_model("static", model_static, test_loader, DEVICE, class_names)
+        results["static"] = evaluate_model(
+            "static", model_static, test_loader, DEVICE, class_names, output_suffix, output_dir
+        )
     else:
         print(f"\nWARNING: Static model checkpoint not found: {static_ckpt}")
 
     # --- Dynamic model ---
-    dynamic_ckpt = CHECKPOINTS_DIR / "best_dynamic.pth"
+    dynamic_ckpt = (
+        Path(args.dynamic_ckpt)
+        if args.dynamic_ckpt
+        else CHECKPOINTS_DIR / f"best_dynamic{'' if args.variant == 'base' else '_opt'}.pth"
+    )
     if dynamic_ckpt.exists():
         model_dynamic = get_model("dynamic", num_classes=num_classes, pretrained=False).to(DEVICE)
         checkpoint = torch.load(dynamic_ckpt, map_location=DEVICE, weights_only=True)
@@ -198,7 +265,7 @@ def main():
         print(f"\nDynamic test samples: {len(test_ds)}")
 
         results["dynamic"] = evaluate_model(
-            "dynamic", model_dynamic, test_loader, DEVICE, class_names
+            "dynamic", model_dynamic, test_loader, DEVICE, class_names, output_suffix, output_dir
         )
     else:
         print(f"\nWARNING: Dynamic model checkpoint not found: {dynamic_ckpt}")
@@ -219,13 +286,13 @@ def main():
             print(f"{metric:<15} {s:>10{fmt}} {d:>10{fmt}} {sign}{diff:>9{fmt}}")
 
     # Save results
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     save_results = {}
     for key, val in results.items():
         save_results[key] = {k: v for k, v in val.items() if k != "report"}
-    with open(RESULTS_DIR / "evaluation_results.json", "w") as f:
+    results_path = output_dir / f"evaluation_results{output_suffix}.json"
+    with open(results_path, "w", encoding="utf-8") as f:
         json.dump(save_results, f, indent=2)
-    print(f"\nResults saved to {RESULTS_DIR / 'evaluation_results.json'}")
+    print(f"\nResults saved to {results_path}")
 
 
 if __name__ == "__main__":

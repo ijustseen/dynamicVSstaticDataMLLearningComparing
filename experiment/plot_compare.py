@@ -1,11 +1,11 @@
 """Create a single comparison plot for training curves (static vs dynamic).
 
 Reads:
-  - results/history_static.json
-  - results/history_dynamic.json
+    - results/latest/history_static.json
+    - results/latest/history_dynamic.json
 
 Writes:
-  - results/training_compare.png
+    - results/latest/training_compare.png
 
 Usage:
   python plot_compare.py
@@ -18,7 +18,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
-from config import RESULTS_DIR
+from config import LATEST_RESULTS_DIR
 
 
 def _load_history(path: Path) -> dict:
@@ -63,8 +63,8 @@ def plot_training_comparison(history_static: dict, history_dynamic: dict, save_p
 
 
 def main() -> None:
-    history_static_path = RESULTS_DIR / "history_static.json"
-    history_dynamic_path = RESULTS_DIR / "history_dynamic.json"
+    history_static_path = LATEST_RESULTS_DIR / "history_static.json"
+    history_dynamic_path = LATEST_RESULTS_DIR / "history_dynamic.json"
 
     if not history_static_path.exists():
         raise FileNotFoundError(
@@ -78,7 +78,7 @@ def main() -> None:
     history_static = _load_history(history_static_path)
     history_dynamic = _load_history(history_dynamic_path)
 
-    out_path = RESULTS_DIR / "training_compare.png"
+    out_path = LATEST_RESULTS_DIR / "training_compare.png"
     plot_training_comparison(history_static, history_dynamic, out_path)
     print(f"Comparison plot saved to {out_path}")
 

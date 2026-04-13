@@ -132,9 +132,76 @@
 
 Примечание: установка CUDA-варианта скачивает большой объём пакетов.
 
+## Итерации обучения (baseline vs optimized)
+
+Цель итераций: уменьшить переобучение (train/val gap) и улучшить качество на test.
+
+### Артефакты прогонов без перезаписи
+
+- Добавили архивацию артефактов каждого запуска в `experiment/results/runs/<timestamp>_*`:
+  - baseline: [train.py](train.py) (копирует history/plot + best/last)
+  - optimized: [train_optimized.py](train_optimized.py) (копирует history/plot + best/last)
+  - Это позволяет сохранять и старые, и новые графики/чекпоинты.
+
+### Оценка конкретных чекпоинтов
+
+- В [evaluate.py](evaluate.py) добавили параметры:
+  - `--static-ckpt` / `--dynamic-ckpt` для оценки чекпоинтов из `results/runs/...`
+  - `--tag` для сохранения метрик/матриц ошибок в отдельные файлы без перезаписи.
+
+### Важный баг/наблюдение: что считать “best” в optimized
+
+- Было: `best_*_opt.pth` сохранялся по улучшению `val_loss`.
+- Наблюдение: для некоторых прогонов качество на test было существенно лучше на `last_*_opt.pth`, чем на `best_*_opt.pth`.
+- Исправили в [train_optimized.py](train_optimized.py):
+  - `best_*_opt.pth` теперь сохраняется по лучшему `val_acc` (best-by-acc)
+  - `best_*_opt_loss.pth` сохраняется отдельно по лучшему `val_loss` (best-by-loss)
+  - Early stopping остаётся по `val_loss`.
+
+### Итоговый прогон (optimized, best-by-acc)
+
+- Команды (2026-04-11):
+  - `python train_optimized.py --model static --epochs 30 --lr 1e-4 --label-smoothing 0.05 --early-stopping-patience 10`
+  - `python train_optimized.py --model dynamic --epochs 30 --lr 1e-4 --label-smoothing 0.05 --early-stopping-patience 10`
+  - `python evaluate.py --variant base --tag base_recalc`
+  - `python evaluate.py --variant opt --tag lr1e4_ls005_pat10_bestacc`
+
+- Результаты (test, сравнение baseline vs optimized):
+  - static accuracy: 0.5668 → 0.5752
+  - dynamic accuracy: 0.6859 → 0.7028
+
+### Короткий LR sweep для уверенности (optimized, `lr=3e-4`)
+
+- Команды (2026-04-11):
+  - `python train_optimized.py --model static --epochs 30 --lr 3e-4 --label-smoothing 0.05 --early-stopping-patience 10`
+  - `python train_optimized.py --model dynamic --epochs 30 --lr 3e-4 --label-smoothing 0.05 --early-stopping-patience 10`
+  - `python evaluate.py --variant opt --tag lr3e4_ls005_pat10_bestacc`
+
+- Результаты (test):
+  - static: accuracy = 0.5716, f1 = 0.5636, fps = 24.0
+  - dynamic: accuracy = 0.6498, f1 = 0.6444, fps = 5.6
+
+- Сравнение с оптимальным вариантом (`lr=1e-4`, best-by-acc):
+  - static accuracy: 0.5716 vs 0.5752 (−0.0036)
+  - dynamic accuracy: 0.6498 vs 0.7028 (−0.0529)
+
+- Вывод: `lr=3e-4` ухудшает качество (особенно dynamic), поэтому фиксируем `lr=1e-4` как финальный конфиг и прекращаем дальнейший подбор.
+
+- Файлы результатов:
+  - baseline: `experiment/results/experiments/base_recalc/evaluation_results.json`
+  - optimized (best-by-acc): `experiment/results/experiments/lr1e4_ls005_pat10_bestacc/evaluation_results_opt.json`
+  - чекпоинты: `experiment/checkpoints/best_*_opt.pth` и `experiment/checkpoints/best_*_opt_loss.pth`
+  - архив прогонов: `experiment/results/runs/20260411_142907_static_opt/` и `experiment/results/runs/20260411_143139_dynamic_opt/`
+  - latest-артефакты (перезаписываются): `experiment/results/latest/`
+
 ## Последнее обновление
 
 - 2026-04-05: подготовили данные `prepare_data.py` → `data/processed/`.
 - 2026-04-05: переключили PyTorch на GPU (CUDA, cu124), проверили `torch.cuda.is_available() == True`.
 - 2026-04-05: сделали smoke-train (static 1 epoch и dynamic 1 epoch), получили `best_static.pth` и `best_dynamic.pth`.
 - 2026-04-05: запустили `evaluate.py`, сохранили `evaluation_results.json` и confusion matrices в `experiment/results/`.
+- 2026-04-10/11: добавили архивацию артефактов прогонов в `experiment/results/runs/` (чтобы новые графики не затирали старые).
+- 2026-04-11: расширили `evaluate.py` (tag + явные пути к ckpt) для сравнения archived-runs.
+- 2026-04-11: исправили сохранение optimized чекпоинтов: `best_*_opt.pth` теперь best-by-acc + добавили `best_*_opt_loss.pth`.
+- 2026-04-11: получили улучшение на test для optimized (static и dynamic) относительно baseline.
+- 2026-04-11: сделали короткий LR sweep (`lr=3e-4`), качество стало хуже — оставили `lr=1e-4`.

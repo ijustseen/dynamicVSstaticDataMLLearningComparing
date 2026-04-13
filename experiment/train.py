@@ -7,7 +7,9 @@ Usage:
 
 import argparse
 import json
+import shutil
 import time
+from datetime import datetime
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -21,6 +23,7 @@ from config import (
     BATCH_SIZE_STATIC,
     CHECKPOINTS_DIR,
     DEVICE,
+    LATEST_RESULTS_DIR,
     LABEL_MAP_FILE,
     LEARNING_RATE,
     NUM_EPOCHS,
@@ -136,6 +139,12 @@ def main():
     # Create directories
     CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    LATEST_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = RESULTS_DIR / "runs" / f"{run_id}_{model_type}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Run artifacts will also be saved to: {run_dir}")
 
     # Load datasets
     splits_file = PROCESSED_DIR / "splits.txt"
@@ -237,11 +246,21 @@ def main():
     )
 
     # Save history
-    with open(RESULTS_DIR / f"history_{model_type}.json", "w") as f:
+    history_path = LATEST_RESULTS_DIR / f"history_{model_type}.json"
+    with open(history_path, "w") as f:
         json.dump(history, f, indent=2)
 
     # Plot
-    plot_training_history(history, RESULTS_DIR / f"training_{model_type}.png")
+    plot_path = LATEST_RESULTS_DIR / f"training_{model_type}.png"
+    plot_training_history(history, plot_path)
+
+    best_ckpt_path = CHECKPOINTS_DIR / f"best_{model_type}.pth"
+    last_ckpt_path = CHECKPOINTS_DIR / f"last_{model_type}.pth"
+    for artifact_path in (history_path, plot_path, best_ckpt_path, last_ckpt_path):
+        if artifact_path.exists():
+            shutil.copy2(artifact_path, run_dir / artifact_path.name)
+        else:
+            print(f"WARNING: artifact not found for run archive: {artifact_path}")
 
 
 if __name__ == "__main__":

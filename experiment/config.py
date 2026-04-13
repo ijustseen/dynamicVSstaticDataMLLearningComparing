@@ -13,6 +13,12 @@ LABEL_MAP_FILE = PROCESSED_DIR / "label_map.json"
 CHECKPOINTS_DIR = BASE_DIR / "checkpoints"
 RESULTS_DIR = BASE_DIR / "results"
 
+# --- Results structure ---
+# 'latest' keeps the most recent artifacts (overwritten each run).
+# 'experiments' stores tagged evaluation outputs in separate folders.
+LATEST_RESULTS_DIR = RESULTS_DIR / "latest"
+EXPERIMENTS_DIR = RESULTS_DIR / "experiments"
+
 # --- Image / Video ---
 IMG_SIZE = 224
 SEQUENCE_LENGTH = 16  # Number of frames for dynamic model
